@@ -17,6 +17,7 @@ You can make a virtual environment for run, like this:
         pip install flask
         pip install flask-login
         pip install -U Flask-SQLAlchemy
+        npm install -g typescript
 
     After, run:
     python (or python3) login_system.py

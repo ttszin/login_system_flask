@@ -1,16 +1,32 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="pt-br">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Tela Inicial</title>
+    <title>Chat em Tempo Real</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
 </head>
 <body>
-    <h1>
-        {% if current_user.is_authenticated %}
-            <h1>Olá {{current_user.nome}}, você está logado!!</h1>
-        {% else %}
-            <h1>Você não está logado</h1>
-        {% endif %}
+
+    <div id="chat-container">
+        <div class="chat-header">
+            <h1>Chat - Bem-vindo, {{ username }}!</h1>
+            <a href="{{ url_for('logout') }}">Sair</a>
+        </div>
+        
+        <pre id="messages" class="chat-messages"></pre>
+        
+        <div class="chat-input-area">
+            <input type="text" id="message-input" placeholder="Digite sua mensagem..." autocomplete="off">
+            <button id="send-button">Enviar</button>
+        </div>
+    </div>
+
+    <script>
+        const authenticated_user = "{{ username }}";
+    </script>
+
+    <script src="{{ url_for('static', filename='app.js') }}"></script>
+
 </body>
 </html>

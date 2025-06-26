@@ -22,10 +22,11 @@ def user_loader(id):
     usuario = db.session.query(Usuario).filter_by(id=id).first()
     return usuario
 
-
+#Rota do chat
 @app.route('/')
+@login_required # SÓ USUÁRIOS LOGADOS PODEM ACESSAR
 def index():
-    return render_template('index.html')
+    return render_template('index.html', username=current_user.nome)
     
 @app.route('/login', methods=['GET', 'POST'])  
 def login():
