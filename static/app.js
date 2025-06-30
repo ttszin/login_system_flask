@@ -3,7 +3,7 @@
 var messagesDiv = document.getElementById("messages");
 var messageInput = document.getElementById("message-input");
 var sendButton = document.getElementById("send-button");
-var ws = new WebSocket("ws://localhost:8765");
+var ws = new WebSocket(websocket_url); 
 ws.onopen = function () {
     console.log("Conectado à Ponte WebSocket!");
     if (authenticated_user) {

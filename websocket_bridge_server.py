@@ -3,8 +3,10 @@
 import asyncio
 import websockets
 import socket
+import os # Importe o 'os'
 
-CORE_SERVER_HOST = '127.0.0.1'
+# O host do core virá de uma variável de ambiente. Se não existir, usa localhost como padrão.
+CORE_SERVER_HOST = os.environ.get('CORE_SERVER_HOST', '127.0.0.1')
 CORE_SERVER_PORT = 9999
 
 # ############################################################### #

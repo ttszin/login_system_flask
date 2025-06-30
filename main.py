@@ -4,6 +4,7 @@ from flask_login import LoginManager,login_user, login_required, logout_user, cu
 from db import db
 from models import Usuario
 import hashlib
+import os # Importe o 'os'
 
 app = Flask(__name__)
 app.secret_key = 'teteucode'  # Chave secreta para proteger a sessão do usuário
@@ -26,7 +27,8 @@ def user_loader(id):
 @app.route('/')
 @login_required # SÓ USUÁRIOS LOGADOS PODEM ACESSAR
 def index():
-    return render_template('index.html', username=current_user.nome)
+    websocket_url = os.environ.get('WEBSOCKET_URL', 'ws://localhost:8765')
+    return render_template('index.html', username=current_user.nome, websocket_url=websocket_url)
     
 @app.route('/login', methods=['GET', 'POST'])  
 def login():
