@@ -1,4 +1,5 @@
 Flask
 Flask-Login
 Flask-SQLAlchemy
-websockets
+gunicorn
+Flask-Sock
