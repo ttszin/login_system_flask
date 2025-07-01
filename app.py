@@ -3,8 +3,7 @@ import hashlib
 import socket
 import threading
 from flask import Flask, request, redirect, url_for, render_template
-# CORREÇÃO: Adicionado 'current_user' e 'UserMixin' que estava faltando
-from flask_login import LoginManager, login_user, login_required, logout_user, current_user, UserMixin
+from flask_login import LoginManager, login_user, login_required, logout_user, current_user
 from flask_sock import Sock
 from db import db
 from models import Usuario, Mensagem
@@ -24,7 +23,7 @@ login_manager.login_view = 'login'
 CHAT_SERVER_HOST = os.environ.get('CHAT_SERVER_HOST')
 CHAT_SERVER_PORT = int(os.environ.get('CHAT_SERVER_PORT', 10001))
 
-# --- 3. PONTE WEBSOCKET COM THREADS ---
+# --- 3. PONTE WEBSOCKET COM THREADS (LÓGICA CORRIGIDA) ---
 @sock.route('/chat')
 def chat_socket(ws):
     try:
@@ -36,39 +35,48 @@ def chat_socket(ws):
         ws.close()
         return
 
-    stop_threads = threading.Event()
+    stop_event = threading.Event()
 
+    # THREAD 1: Lê do navegador (WebSocket) e envia para o servidor de chat (TCP)
     def browser_to_tcp():
         try:
-            while not stop_threads.is_set():
-                data = ws.receive(timeout=1) # Usamos timeout para não bloquear para sempre
-                if data:
-                    tcp_socket.sendall(data.encode('utf-8') + b'\n')
+            # O ws.receive() agora vai bloquear até uma mensagem chegar, sem timeout.
+            # O gevent cuida para que isso não trave o servidor.
+            while not stop_event.is_set():
+                data = ws.receive()
+                if data is None: # Conexão fechada pelo navegador
+                    break
+                tcp_socket.sendall(data.encode('utf-8') + b'\n')
         except Exception as e:
             print(f"Conexão navegador->servidor fechada: {e}")
         finally:
-            stop_threads.set() # Sinaliza para a outra thread parar
+            stop_event.set() # Sinaliza para a outra thread parar
 
+    # THREAD 2: Lê do servidor de chat (TCP) e envia para o navegador (WebSocket)
     def tcp_to_browser():
         try:
-            while not stop_threads.is_set():
+            while not stop_event.is_set():
                 data = tcp_socket.recv(4096)
-                if not data:
-                    break 
+                if not data: # Conexão fechada pelo servidor de chat
+                    break
                 ws.send(data.decode('utf-8'))
         except Exception as e:
             print(f"Conexão servidor->navegador fechada: {e}")
         finally:
-            stop_threads.set()
+            stop_event.set()
 
+    # Inicia as duas threads para fazer a ponte
     b2t = threading.Thread(target=browser_to_tcp)
     t2b = threading.Thread(target=tcp_to_browser)
+    b2t.daemon = True
+    t2b.daemon = True
+    
     b2t.start()
     t2b.start()
     
-    t2b.join()
-    b2t.join()
-
+    # Mantém a rota viva enquanto as threads estiverem rodando
+    stop_event.wait()
+    
     tcp_socket.close()
     ws.close()
     print("Ponte WebSocket encerrada.")
