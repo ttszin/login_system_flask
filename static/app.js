@@ -1,5 +1,4 @@
-// static/app.js
-
+console.log("app.js foi carregado e está executando!");
 // 1. SELECIONANDO OS ELEMENTOS DO "PALCO" (HTML)
 const messagesDiv = document.getElementById("messages");
 const messageInput = document.getElementById("message-input");
