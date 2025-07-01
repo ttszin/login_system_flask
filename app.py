@@ -1,142 +1,78 @@
 import os
 import hashlib
+import asyncio
 from flask import Flask, request, redirect, url_for, render_template
-# CORREÇÃO 1: Importar UserMixin diretamente
 from flask_login import LoginManager, login_user, login_required, logout_user, current_user, UserMixin
 from flask_sqlalchemy import SQLAlchemy
-from sqlalchemy.sql import func
 from flask_sock import Sock
 
-# --- 1. CONFIGURAÇÃO INICIAL ---
+# --- Configuração do Servidor Web ---
 app = Flask(__name__)
-app.config['SQLALCHEMY_DATABASE_URI'] = os.environ.get('DATABASE_URL', 'sqlite:///database.db')
-app.config['SECRET_KEY'] = os.environ.get('SECRET_KEY', 'default_secret_key_for_dev')
-
+app.config['SQLALCHEMY_DATABASE_URI'] = os.environ.get('DATABASE_URL')
+app.config['SECRET_KEY'] = os.environ.get('SECRET_KEY', 'dev-secret')
 db = SQLAlchemy(app)
 sock = Sock(app)
 login_manager = LoginManager(app)
 login_manager.login_view = 'login'
 
-connected_clients = []
+# --- Configuração da Ponte (Bridge) ---
+CHAT_SERVER_HOST = os.environ.get('CHAT_SERVER_HOST') # Ex: 'chat-server'
+CHAT_SERVER_PORT = int(os.environ.get('CHAT_SERVER_PORT', 10001))
 
-# --- 2. MODELOS DO BANCO DE DADOS (Models) ---
-# CORREÇÃO 2: Usar UserMixin diretamente
+# --- Modelos do Banco de Dados ---
+# (Defina os modelos Usuario e Mensagem aqui, exatamente como antes)
 class Usuario(db.Model, UserMixin):
-    __tablename__ = 'usuarios'
-    id = db.Column(db.Integer, primary_key=True)
-    nome = db.Column(db.String(50), unique=True, nullable=False)
-    senha = db.Column(db.String(256), nullable=False)
-    mensagens = db.relationship('Mensagem', backref='autor', lazy=True)
+    # ... código do modelo ...
+    pass
 
-class Mensagem(db.Model):
-    __tablename__ = 'mensagens'
-    id = db.Column(db.Integer, primary_key=True)
-    texto = db.Column(db.String(500), nullable=False)
-    timestamp = db.Column(db.DateTime(timezone=True), server_default=func.now())
-    usuario_id = db.Column(db.Integer, db.ForeignKey('usuarios.id'), nullable=False)
+# --- Ponte WebSocket ---
+async def bridge_browser_to_tcp(ws, writer):
+    """Lê do WebSocket (navegador) e escreve no TCP (servidor de chat)."""
+    try:
+        async for msg in ws:
+            writer.write(msg.encode('utf-8') + b'\n')
+            await writer.drain()
+    finally:
+        writer.close()
 
-# --- 3. LÓGICA DO CHAT ---
-def broadcast(message_to_send):
-    for client in list(connected_clients):
-        try:
-            client.send(message_to_send)
-        except Exception:
-            connected_clients.remove(client)
+async def bridge_tcp_to_browser(reader, ws):
+    """Lê do TCP (servidor de chat) e escreve no WebSocket (navegador)."""
+    try:
+        while not reader.at_eof():
+            data = await reader.readline()
+            if data:
+                await ws.send(data.decode('utf-8'))
+            else:
+                break
+    finally:
+        await ws.close()
 
-# --- 4. ROTA WEBSOCKET ---
 @sock.route('/chat')
 def chat_socket(ws):
-    connected_clients.append(ws)
-    user_nome = "Anônimo"
+    async def chat_handler():
+        print(f"Nova conexão WebSocket. Conectando à ponte em {CHAT_SERVER_HOST}:{CHAT_SERVER_PORT}...")
+        try:
+            # Conecta ao nosso servidor de chat com threads
+            reader, writer = await asyncio.open_connection(CHAT_SERVER_HOST, CHAT_SERVER_PORT)
+            
+            # Orquestra as duas pontes para rodarem em paralelo
+            browser_to_tcp_task = asyncio.create_task(bridge_browser_to_tcp(ws, writer))
+            tcp_to_browser_task = asyncio.create_task(bridge_tcp_to_browser(reader, ws))
 
-    try:
-        user_nome = ws.receive(timeout=5)
-        print(f"[*] Conexão WebSocket estabelecida para o usuário: {user_nome}")
-        broadcast(f"--- {user_nome} entrou na sala. ---")
-        
-        with app.app_context():
-            ultimas_mensagens = db.session.query(Mensagem).order_by(Mensagem.timestamp.asc()).limit(50).all()
-            for msg in ultimas_mensagens:
-                history_line = f"(Histórico) {msg.autor.nome}: {msg.texto}"
-                ws.send(history_line)
-        ws.send(f"--- Bem-vindo, {user_nome}! ---")
+            await asyncio.gather(browser_to_tcp_task, tcp_to_browser_task)
 
-        while True:
-            message_text = ws.receive()
-            if message_text:
-                with app.app_context():
-                    usuario_obj = db.session.query(Usuario).filter_by(nome=user_nome).first()
-                    if usuario_obj:
-                        nova_mensagem = Mensagem(texto=message_text, autor=usuario_obj)
-                        db.session.add(nova_mensagem)
-                        db.session.commit()
-                        
-                        full_message = f"{user_nome}: {message_text}"
-                        broadcast(full_message)
+        except Exception as e:
+            print(f"Erro na ponte WebSocket: {e}")
+    
+    # Inicia o manipulador assíncrono para esta conexão WebSocket
+    asyncio.run(chat_handler())
 
-    except Exception as e:
-        print(f"[*] Erro na conexão com {user_nome}: {e}")
-    finally:
-        if ws in connected_clients:
-            connected_clients.remove(ws)
-        broadcast(f"--- {user_nome} saiu da sala. ---")
-        print(f"[*] Conexão WebSocket fechada para o usuário: {user_nome}")
-
-# --- 5. ROTAS HTTP ---
-@login_manager.user_loader
-def load_user(user_id):
-    return db.session.get(Usuario, int(user_id))
-
-def hash_senha(txt):
-    return hashlib.sha256(txt.encode('utf-8')).hexdigest()
-
+# --- Rotas HTTP ---
+# (Coloque todas as suas rotas Flask aqui: /, /login, /cadastrar, /logout, /healthz)
 @app.route('/')
-@login_required
-def index():
-    return render_template('index.html', username=current_user.nome)
+# ... resto do seu código Flask ...
+pass
 
-@app.route('/login', methods=['GET', 'POST'])
-def login():
-    if current_user.is_authenticated:
-        return redirect(url_for('index'))
-    if request.method == 'POST':
-        nome = request.form['nomeForm']
-        senha = request.form['senhaForm']
-        user = db.session.query(Usuario).filter_by(nome=nome, senha=hash_senha(senha)).first()
-        if user:
-            login_user(user)
-            return redirect(url_for('index'))
-        else:
-            return "Usuário ou senha incorretos", 401
-    return render_template('login.html')
-
-@app.route('/cadastrar', methods=['GET', 'POST'])
-def cadastrar():
-    if current_user.is_authenticated:
-        return redirect(url_for('index'))
-    if request.method == 'POST':
-        nome = request.form['nomeForm']
-        if db.session.query(Usuario).filter_by(nome=nome).first():
-            return "Este nome de usuário já está em uso.", 400
-        
-        senha = request.form['senhaForm']
-        new_user = Usuario(nome=nome, senha=hash_senha(senha))
-        db.session.add(new_user)
-        db.session.commit()
-        login_user(new_user)
-        return redirect(url_for('index'))
-    return render_template('cadastrar.html')
-
-@app.route('/logout')
-@login_required
-def logout():
-    logout_user()
-    return redirect(url_for('login'))
-
-@app.route('/healthz')
-def health_check():
-    return "OK", 200
-
-# --- PONTO DE ENTRADA ---
+# --- Ponto de Entrada ---
 with app.app_context():
     db.create_all()

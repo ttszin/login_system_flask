@@ -2,5 +2,6 @@ Flask
 Flask-Login
 Flask-SQLAlchemy
 gunicorn
-Flask-Sock
 gevent
+Flask-Sock
+psycopg2-binary # Necessário para o PostgreSQL
