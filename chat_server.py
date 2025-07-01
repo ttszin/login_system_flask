@@ -1,20 +1,33 @@
 import socket
 import threading
 import os
+import sys
 from flask import Flask
-# ADICIONADO: Importar o 'db' do nosso arquivo
 from db import db
-# ADICIONADO: Importar os modelos da nossa fonte única da verdade
 from models import Usuario, Mensagem
+
+# --- DEBUGGING INICIAL ---
+# Esta é a primeira coisa que o script faz.
+print("--- INICIANDO SCRIPT chat_server.py ---")
+db_url_from_env = os.environ.get('DATABASE_URL')
+
+if db_url_from_env:
+    print(f"Variável DATABASE_URL encontrada com sucesso.")
+    # Não vamos imprimir a URL completa por segurança, apenas confirmar que ela existe.
+else:
+    print("!!! ERRO CRÍTICO: Variável de ambiente DATABASE_URL não foi encontrada pelo script. !!!")
+    sys.exit("Encerrando devido à falta da DATABASE_URL.") # Encerra o script se a variável não existe
+
+print("--- DEBUGGING COMPLETO, INICIANDO CONFIGURAÇÃO DO APP ---")
+# --- FIM DO DEBUGGING ---
+
 
 # --- Configuração para acesso ao Banco de Dados ---
 app = Flask(__name__)
-app.config['SQLALCHEMY_DATABASE_URI'] = os.environ.get('DATABASE_URL')
+# Usamos a variável que acabamos de verificar
+app.config['SQLALCHEMY_DATABASE_URI'] = db_url_from_env
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
-# Inicializa o db com o app
 db.init_app(app)
-
-# REMOVIDO: A definição de 'Usuario' que estava aqui foi removida
 
 # --- Lógica do Servidor de Chat Multithread ---
 HOST = '0.0.0.0'
@@ -22,6 +35,7 @@ PORT = 10001
 clients = []
 clients_lock = threading.Lock()
 
+# (O resto do código continua exatamente o mesmo de antes)
 def broadcast(message, sender_socket):
     with clients_lock:
         for client in clients:
@@ -42,7 +56,6 @@ def handle_client(client_socket):
         
         username = username_bytes.decode('utf-8').strip()
 
-        # Usar o contexto do app para interagir com o DB
         with app.app_context():
             user_obj = db.session.query(Usuario).filter_by(nome=username).first()
         
@@ -60,7 +73,6 @@ def handle_client(client_socket):
             
             message_text = message_bytes.decode('utf-8').strip()
             
-            # ADICIONADO: Salvar a mensagem no banco de dados
             with app.app_context():
                 nova_mensagem = Mensagem(texto=message_text, autor=user_obj)
                 db.session.add(nova_mensagem)
