@@ -1,12 +1,12 @@
 import os
 import hashlib
-import asyncio
+import socket
+import threading
 from flask import Flask, request, redirect, url_for, render_template
-from flask_login import LoginManager, login_user, login_required, logout_user, current_user
+# CORREÇÃO: Adicionado 'current_user' e 'UserMixin' que estava faltando
+from flask_login import LoginManager, login_user, login_required, logout_user, current_user, UserMixin
 from flask_sock import Sock
-# ADICIONADO: Importar o 'db' do nosso arquivo
 from db import db
-# ADICIONADO: Importar os modelos da nossa fonte única da verdade
 from models import Usuario, Mensagem
 
 # --- 1. CONFIGURAÇÃO INICIAL ---
@@ -15,7 +15,6 @@ app.config['SQLALCHEMY_DATABASE_URI'] = os.environ.get('DATABASE_URL')
 app.config['SECRET_KEY'] = os.environ.get('SECRET_KEY', 'dev-secret')
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 
-# Inicializa as extensões com o app
 db.init_app(app)
 sock = Sock(app)
 login_manager = LoginManager(app)
@@ -25,49 +24,56 @@ login_manager.login_view = 'login'
 CHAT_SERVER_HOST = os.environ.get('CHAT_SERVER_HOST')
 CHAT_SERVER_PORT = int(os.environ.get('CHAT_SERVER_PORT', 10001))
 
-# REMOVIDO: As definições de modelos que estavam aqui foram removidas
-
-# --- 4. PONTE WEBSOCKET ---
-# (O código da ponte continua exatamente o mesmo de antes)
-async def bridge_browser_to_tcp(ws, writer):
-    """Lê do WebSocket (navegador) e escreve no TCP (servidor de chat)."""
-    try:
-        username = await ws.receive(timeout=5)
-        writer.write(username.encode('utf-8') + b'\n')
-        await writer.drain()
-        async for msg in ws:
-            writer.write(msg.encode('utf-8') + b'\n')
-            await writer.drain()
-    finally:
-        writer.close()
-
-async def bridge_tcp_to_browser(reader, ws):
-    """Lê do TCP (servidor de chat) e escreve no WebSocket (navegador)."""
-    try:
-        while not reader.at_eof():
-            data = await reader.readline()
-            if data:
-                await ws.send(data.decode('utf-8'))
-            else:
-                break
-    finally:
-        await ws.close()
-
+# --- 3. PONTE WEBSOCKET COM THREADS ---
 @sock.route('/chat')
 def chat_socket(ws):
-    async def chat_handler():
-        print(f"Nova conexão WebSocket. Conectando à ponte em {CHAT_SERVER_HOST}:{CHAT_SERVER_PORT}...")
-        try:
-            reader, writer = await asyncio.open_connection(CHAT_SERVER_HOST, CHAT_SERVER_PORT)
-            browser_to_tcp_task = asyncio.create_task(bridge_browser_to_tcp(ws, writer))
-            tcp_to_browser_task = asyncio.create_task(bridge_tcp_to_browser(reader, ws))
-            await asyncio.gather(browser_to_tcp_task, tcp_to_browser_task)
-        except Exception as e:
-            print(f"Erro na ponte WebSocket: {e}")
-    asyncio.run(chat_handler())
+    try:
+        tcp_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        tcp_socket.connect((CHAT_SERVER_HOST, CHAT_SERVER_PORT))
+        print("Ponte conectada com sucesso ao chat-server.")
+    except Exception as e:
+        print(f"PONTE FALHOU AO CONECTAR COM CHAT-SERVER: {e}")
+        ws.close()
+        return
 
-# --- 5. ROTAS HTTP E LÓGICA DE USUÁRIO ---
-# (Todo o código das rotas Flask continua exatamente o mesmo de antes)
+    stop_threads = threading.Event()
+
+    def browser_to_tcp():
+        try:
+            while not stop_threads.is_set():
+                data = ws.receive(timeout=1) # Usamos timeout para não bloquear para sempre
+                if data:
+                    tcp_socket.sendall(data.encode('utf-8') + b'\n')
+        except Exception as e:
+            print(f"Conexão navegador->servidor fechada: {e}")
+        finally:
+            stop_threads.set() # Sinaliza para a outra thread parar
+
+    def tcp_to_browser():
+        try:
+            while not stop_threads.is_set():
+                data = tcp_socket.recv(4096)
+                if not data:
+                    break 
+                ws.send(data.decode('utf-8'))
+        except Exception as e:
+            print(f"Conexão servidor->navegador fechada: {e}")
+        finally:
+            stop_threads.set()
+
+    b2t = threading.Thread(target=browser_to_tcp)
+    t2b = threading.Thread(target=tcp_to_browser)
+    b2t.start()
+    t2b.start()
+    
+    t2b.join()
+    b2t.join()
+
+    tcp_socket.close()
+    ws.close()
+    print("Ponte WebSocket encerrada.")
+
+# --- 4. ROTAS HTTP E LÓGICA DE USUÁRIO ---
 @login_manager.user_loader
 def load_user(user_id):
     return db.session.get(Usuario, int(user_id))
@@ -103,6 +109,7 @@ def cadastrar():
         nome = request.form['nomeForm']
         if db.session.query(Usuario).filter_by(nome=nome).first():
             return "Este nome de usuário já está em uso.", 400
+        
         senha = request.form['senhaForm']
         new_user = Usuario(nome=nome, senha=hash_senha(senha))
         db.session.add(new_user)
