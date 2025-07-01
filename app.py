@@ -7,6 +7,8 @@ from flask_login import LoginManager, login_user, login_required, logout_user, c
 from flask_sock import Sock
 from db import db
 from models import Usuario, Mensagem
+from gevent import monkey
+monkey.patch_all()
 
 # --- 1. CONFIGURAÇÃO INICIAL ---
 app = Flask(__name__)
