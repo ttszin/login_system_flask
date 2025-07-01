@@ -1,26 +1,41 @@
 console.log("app.js foi carregado e está executando!");
-// 1. SELECIONANDO OS ELEMENTOS DO "PALCO" (HTML)
+
 const messagesDiv = document.getElementById("messages");
 const messageInput = document.getElementById("message-input");
 const sendButton = document.getElementById("send-button");
 
-// 2. CONSTRUINDO A URL DO WEBSOCKET DINAMICAMENTE
+// Verifica se a variável do usuário existe
+if (typeof authenticated_user === 'undefined') {
+    console.error("ERRO: A variável 'authenticated_user' não foi definida no HTML.");
+}
+
 const socketProtocol = window.location.protocol === "https:" ? "wss:" : "ws:";
 const socketUrl = `${socketProtocol}//${window.location.host}/chat`;
+
+console.log(`Tentando conectar ao WebSocket em: ${socketUrl}`); // Ponto de verificação 2
+
 const ws = new WebSocket(socketUrl);
 
-// 3. LÓGICA DO WEBSOCKET
 ws.onopen = function () {
-    console.log("Conectado ao servidor de Chat!");
-    // A primeira mensagem que enviamos é o nome do nosso usuário para identificação
+    console.log("SUCESSO: Conexão WebSocket aberta!"); // Ponto de verificação 3
     if (authenticated_user) {
         ws.send(authenticated_user);
     }
 };
 
+ws.onclose = function (event) {
+    console.error("FALHA: Conexão WebSocket foi fechada.", event); // Ponto de verificação 4
+    messagesDiv.textContent += "\n--- Conexão com o servidor perdida. Por favor, atualize a página. ---\n";
+};
+
+ws.onerror = function (error) {
+    console.error("ERRO: Ocorreu um erro no WebSocket.", error); // Ponto de verificação 5
+};
+
+
+// O resto das funções (onmessage, sendMessage, etc.) continua igual...
 ws.onmessage = function (event) {
     const message = event.data;
-    // Adiciona uma quebra de linha se não for a primeira mensagem
     if (messagesDiv.textContent.length > 0) {
         messagesDiv.textContent += "\n" + message;
     } else {
@@ -29,30 +44,15 @@ ws.onmessage = function (event) {
     messagesDiv.scrollTop = messagesDiv.scrollHeight;
 };
 
-ws.onclose = function () {
-    messagesDiv.textContent += "\n--- Conexão com o servidor perdida. Por favor, atualize a página. ---\n";
-};
-
-ws.onerror = function (error) {
-    console.error('WebSocket Error:', error);
-    messagesDiv.textContent += "\n--- Ocorreu um erro na conexão. ---\n";
-};
-
-// 4. FUNÇÃO PARA ENVIAR MENSAGENS
 function sendMessage() {
     const message = messageInput.value.trim();
     if (message && ws.readyState === WebSocket.OPEN) {
-        // Envia a mensagem para o servidor. 
-        // O servidor irá fazer o broadcast incluindo nosso nome de usuário.
         ws.send(message);
-        
-        // Limpa o input
         messageInput.value = "";
         messageInput.focus();
     }
 }
 
-// 5. LISTENERS DE EVENTOS
 sendButton.addEventListener("click", sendMessage);
 messageInput.addEventListener("keyup", function (event) {
     if (event.key === "Enter") {
