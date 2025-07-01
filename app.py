@@ -46,8 +46,6 @@ def chat_socket(ws):
             # O gevent cuida para que isso não trave o servidor.
             while not stop_event.is_set():
                 data = ws.receive()
-                if data is None: # Conexão fechada pelo navegador
-                    break
                 tcp_socket.sendall(data.encode('utf-8') + b'\n')
         except Exception as e:
             print(f"Conexão navegador->servidor fechada: {e}")
