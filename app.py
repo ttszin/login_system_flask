@@ -1,135 +1,148 @@
-# app.py
 import os
 import hashlib
 import socket
 import threading
 from flask import Flask, request, redirect, url_for, render_template
-from flask_login import LoginManager, login_user, login_required, logout_user, current_user, UserMixin
-from flask_sqlalchemy import SQLAlchemy
+from flask_login import LoginManager, login_user, login_required, logout_user, current_user
 from flask_sock import Sock
-from waitress import serve  # Importamos o Waitress
+from db import db
 from models import Usuario, Mensagem
 
-# --- 1. CONFIGURAÇÃO GERAL ---
+# --- 1. CONFIGURAÇÃO INICIAL ---
+# Esta seção configura o servidor Flask, o banco de dados e o sistema de login.
 app = Flask(__name__)
-# Usamos um banco de dados SQLite simples, que funcionará bem em um único serviço.
-app.config['SQLALCHEMY_DATABASE_URI'] = os.environ.get('DATABASE_URL', 'sqlite:///database.db')
-app.config['SECRET_KEY'] = os.environ.get('SECRET_KEY', 'dev-secret')
+app.config['SQLALCHEMY_DATABASE_URI'] = os.environ.get('DATABASE_URL')
+app.config['SECRET_KEY'] = os.environ.get('SECRET_KEY', 'dev-secret-key')
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 
-db = SQLAlchemy(app)
+db.init_app(app)
 sock = Sock(app)
 login_manager = LoginManager(app)
 login_manager.login_view = 'login'
 
-# --- 2. LÓGICA DO CHAT COM THREADS ---
-clients = {}  # Usaremos um dicionário para mapear nome de usuário -> socket
-clients_lock = threading.Lock()
+# --- 2. CONFIGURAÇÃO DA PONTE (BRIDGE) ---
+# Lê das variáveis de ambiente onde encontrar o nosso servidor de chat.
+CHAT_SERVER_HOST = os.environ.get('CHAT_SERVER_HOST')
+CHAT_SERVER_PORT = int(os.environ.get('CHAT_SERVER_PORT', 10001))
 
-def broadcast(message_bytes, sender_username):
-    with clients_lock:
-        for username, client_socket in clients.items():
-            if username != sender_username:
-                try:
-                    client_socket.sendall(message_bytes)
-                except:
-                    # Se falhar, a limpeza será feita na thread do cliente
-                    pass
-
-def chat_client_thread(username, ws):
-    """Esta é a thread que representa um cliente no backend."""
-    client_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    try:
-        # O cliente se conecta ao próprio processo do servidor, via localhost
-        client_socket.connect(('127.0.0.1', 10001))
-        
-        with clients_lock:
-            clients[username] = client_socket
-        
-        print(f"THREAD DE CHAT: {username} conectado.")
-        broadcast(f"--- {username} entrou no chat ---\n".encode('utf-8'), username)
-
-        # Loop para receber mensagens do navegador e enviar para outros
-        while True:
-            message_text = ws.receive()
-            if message_text is None:
-                break
-            
-            full_message = f"{username}: {message_text}\n".encode('utf-8')
-            broadcast(full_message, username)
-            
-            # Salva no DB
-            with app.app_context():
-                user_obj = db.session.query(Usuario).filter_by(nome=username).first()
-                if user_obj:
-                    nova_mensagem = Mensagem(texto=message_text, autor=user_obj)
-                    db.session.add(nova_mensagem)
-                    db.session.commit()
-    except Exception as e:
-        print(f"Erro na thread de chat para {username}: {e}")
-    finally:
-        with clients_lock:
-            if username in clients:
-                del clients[username]
-        client_socket.close()
-        broadcast(f"--- {username} saiu do chat ---\n".encode('utf-8'), username)
-        print(f"THREAD DE CHAT: {username} desconectado.")
-
-
+# --- 3. PONTE WEBSOCKET COM THREADS ---
+# Esta é a parte mais importante: ela conecta o mundo da Web (WebSockets)
+# com o nosso servidor de chat clássico (TCP Sockets).
 @sock.route('/chat')
-def chat_socket_bridge(ws):
-    """Recebe a conexão WebSocket e dispara a thread de chat."""
-    # A primeira mensagem é o nome de usuário
-    username = ws.receive()
-    
-    # Instancia e inicia a thread do cliente de chat
-    thread = threading.Thread(target=chat_client_thread, args=(username, ws))
-    thread.daemon = True
-    thread.start()
-    
-    # Esta thread apenas escuta o socket TCP e envia de volta para o navegador
+def chat_socket(ws):
     try:
-        while thread.is_alive():
-            with clients_lock:
-                client_socket = clients.get(username)
-            
-            if client_socket:
-                try:
-                    # Espera por dados do servidor de broadcast
-                    data = client_socket.recv(4096)
-                    if not data:
-                        break
-                    ws.send(data.decode('utf-8'))
-                except:
-                    break
+        # Abre uma conexão TCP com o nosso chat_server.
+        tcp_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        tcp_socket.connect((CHAT_SERVER_HOST, CHAT_SERVER_PORT))
+        print("Ponte conectada com sucesso ao chat-server.")
     except Exception as e:
-        print(f"Ponte WebSocket para {username} fechada: {e}")
+        print(f"PONTE FALHOU AO CONECTAR COM CHAT-SERVER: {e}")
+        ws.close()
+        return
 
+    stop_event = threading.Event()
 
-# --- 3. MODELOS E ROTAS FLASK (Exatamente como antes) ---
-class Usuario(db.Model, UserMixin):
-    # ... (código completo do modelo Usuario)
-    pass
-# ... (código completo do modelo Mensagem e todas as rotas Flask: /login, etc.)
-# ...
+    # THREAD 1: Lê do navegador (WebSocket) e envia para o servidor de chat (TCP)
+    def browser_to_tcp():
+        try:
+            # Este loop espera por mensagens do navegador.
+            while not stop_event.is_set():
+                data = ws.receive()
+                if data is None: # Conexão fechada pelo navegador
+                    break
+                # Envia os dados para o chat_server.
+                tcp_socket.sendall(data.encode('utf-8') + b'\n')
+        except Exception as e:
+            print(f"Conexão navegador->servidor fechada: {e}")
+        finally:
+            stop_event.set() # Sinaliza para a outra thread parar
 
-# --- 4. FUNÇÃO PARA INICIAR O SERVIDOR WEB ---
-def run_web_server():
-    # Usamos Waitress em vez do Gunicorn para servir a aplicação Flask
-    print("--- Iniciando servidor web com Waitress na porta 10000 ---")
-    serve(app, host='0.0.0.0', port=10000)
+    # THREAD 2: Lê do servidor de chat (TCP) e envia para o navegador (WebSocket)
+    def tcp_to_browser():
+        try:
+            # Este loop espera por mensagens vindas do chat_server.
+            while not stop_event.is_set():
+                data = tcp_socket.recv(4096)
+                if not data: # Conexão fechada pelo servidor de chat
+                    break
+                # Envia os dados de volta para o navegador.
+                ws.send(data.decode('utf-8'))
+        except Exception as e:
+            print(f"Conexão servidor->navegador fechada: {e}")
+        finally:
+            stop_event.set()
 
-# --- PONTO DE ENTRADA PRINCIPAL ---
-if __name__ == '__main__':
-    with app.app_context():
-        db.create_all()
+    # Inicia as duas threads para fazer a ponte funcionar em paralelo.
+    b2t = threading.Thread(target=browser_to_tcp)
+    t2b = threading.Thread(target=tcp_to_browser)
+    b2t.daemon = True
+    t2b.daemon = True
+    b2t.start()
+    t2b.start()
+    
+    # Aguarda o evento de parada para encerrar a conexão de forma limpa.
+    stop_event.wait()
+    
+    tcp_socket.close()
+    ws.close()
+    print("Ponte WebSocket encerrada.")
 
-    # Inicia o servidor web Flask em uma thread separada
-    web_thread = threading.Thread(target=run_web_server)
-    web_thread.daemon = True
-    web_thread.start()
+# --- 4. ROTAS HTTP E LÓGICA DE USUÁRIO ---
+# Esta seção contém a lógica padrão do Flask para login, cadastro e servir páginas.
+@login_manager.user_loader
+def load_user(user_id):
+    return db.session.get(Usuario, int(user_id))
 
-    print("--- O programa principal continua... pode adicionar a lógica do servidor TCP aqui se precisar ---")
-    # Mantém o programa principal rodando para que as threads não morram
-    while True:
-        pass
+def hash_senha(txt):
+    return hashlib.sha256(txt.encode('utf-8')).hexdigest()
+
+@app.route('/')
+@login_required
+def index():
+    return render_template('index.html', username=current_user.nome)
+
+@app.route('/login', methods=['GET', 'POST'])
+def login():
+    if current_user.is_authenticated:
+        return redirect(url_for('index'))
+    if request.method == 'POST':
+        nome = request.form['nomeForm']
+        senha = request.form['senhaForm']
+        user = db.session.query(Usuario).filter_by(nome=nome, senha=hash_senha(senha)).first()
+        if user:
+            login_user(user)
+            return redirect(url_for('index'))
+        else:
+            return "Usuário ou senha incorretos", 401
+    return render_template('login.html')
+
+@app.route('/cadastrar', methods=['GET', 'POST'])
+def cadastrar():
+    if current_user.is_authenticated:
+        return redirect(url_for('index'))
+    if request.method == 'POST':
+        nome = request.form['nomeForm']
+        if db.session.query(Usuario).filter_by(nome=nome).first():
+            return "Este nome de usuário já está em uso.", 400
+        senha = request.form['senhaForm']
+        new_user = Usuario(nome=nome, senha=hash_senha(senha))
+        db.session.add(new_user)
+        db.session.commit()
+        login_user(new_user)
+        return redirect(url_for('index'))
+    return render_template('cadastrar.html')
+
+@app.route('/logout')
+@login_required
+def logout():
+    logout_user()
+    return redirect(url_for('login'))
+
+@app.route('/healthz')
+def health_check():
+    return "OK", 200
+
+# --- PONTO DE ENTRADA ---
+# Cria as tabelas do banco de dados se elas não existirem.
+with app.app_context():
+    db.create_all()
