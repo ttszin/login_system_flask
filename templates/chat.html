@@ -5,7 +5,7 @@
     <title>Chat com Failover</title>
     <style>
         body { font-family: system-ui, sans-serif; max-width: 800px; margin: auto; padding: 1rem; background-color: #f4f4f9; }
-        h1 { color: #333; }
+        h1, h3 { color: #333; }
         #messages { border: 1px solid #ddd; padding: 1rem; height: 400px; overflow-y: scroll; background-color: white; border-radius: 8px; margin-bottom: 1rem; }
         #messages div { margin-bottom: 0.5rem; }
         #messages b { color: #007bff; }
@@ -16,6 +16,11 @@
         #sendButton { background-color: #28a745; color: white; border: none; padding: 0.75rem 1.5rem; border-radius: 8px; cursor: pointer; }
         #sendButton:hover { background-color: #218838; }
         #status { text-align: center; font-style: italic; color: #666; padding: 0.5rem; }
+        #admin-controls { margin-top: 2rem; padding: 1rem; border: 1px solid #ccc; border-radius: 8px; background-color: #f9f9f9; }
+        #admin-controls button { background-color: #dc3545; color: white; border: none; padding: 0.5rem 1rem; border-radius: 4px; cursor: pointer; }
+        #admin-controls button:hover { background-color: #c82333; }
+        #admin-controls #check-status-btn { background-color: #007bff; }
+        #admin-controls #check-status-btn:hover { background-color: #0069d9; }
     </style>
 </head>
 <body>
@@ -28,17 +33,22 @@
     </div>
     <div id="status">Conectando...</div>
 
+    <!-- NOVA SEÇÃO DE CONTROLES -->
+    <div id="admin-controls">
+        <h3>Controles do Servidor</h3>
+        <button id="shutdown-btn">Desligar/Reiniciar Servidor 1</button>
+        <button id="check-status-btn">Verificar Status Servidor 1</button>
+        <span id="server1-status" style="font-weight: bold;"></span>
+    </div>
+
     <script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
     <script>
+        // Use seu IP público aqui
         const primaryURL = "http://167.234.230.139:5000";
         const backupURL = "http://167.234.230.139:5001";
         
         const statusDiv = document.getElementById('status');
         const messagesDiv = document.getElementById('messages');
-        const usernameInput = document.getElementById('username');
-        const messageInput = document.getElementById('messageInput');
-        const sendButton = document.getElementById('sendButton');
-        
         let socket;
 
         function addMessage(msg) {
@@ -73,27 +83,61 @@
             statusDiv.innerText = 'Conexão perdida! Tentando failover...';
             if (!socket) return;
             const failedUrl = socket.io.uri;
-            const nextUrl = (failedUrl === primaryURL) ? backupURL : primaryURL;
+            const nextUrl = (failedUrl.includes(primaryURL)) ? backupURL : primaryURL;
             setTimeout(() => connectToServer(nextUrl), 3000);
         }
 
-        sendButton.addEventListener('click', () => {
+        document.getElementById('sendButton').addEventListener('click', () => {
+            const usernameInput = document.getElementById('username');
+            const messageInput = document.getElementById('messageInput');
             if (usernameInput.value && messageInput.value && socket && socket.connected) {
-                const message = {
-                    username: usernameInput.value,
-                    text: messageInput.value
-                };
+                const message = { username: usernameInput.value, text: messageInput.value };
                 socket.emit('send_message', message);
                 messageInput.value = '';
                 messageInput.focus();
             } else {
-                alert('Por favor, digite seu nome e uma mensagem, e aguarde a conexão.');
+                alert('Por favor, digite seu nome e uma mensagem.');
             }
         });
         
+        // NOVO CÓDIGO PARA OS BOTÕES DE CONTROLE
+        const shutdownBtn = document.getElementById('shutdown-btn');
+        const checkStatusBtn = document.getElementById('check-status-btn');
+        const server1Status = document.getElementById('server1-status');
+
+        shutdownBtn.addEventListener('click', () => {
+            server1Status.textContent = ' Enviando comando de desligamento...';
+            // Envia o pedido de shutdown para o servidor 1
+            fetch(primaryURL + '/shutdown', { method: 'POST' })
+                .then(response => {
+                    console.log('Comando de desligamento enviado.');
+                    server1Status.textContent = ' Desligando...';
+                })
+                .catch(error => {
+                    console.error('Erro ao enviar comando:', error);
+                    server1Status.textContent = ' Erro (servidor já offline?)';
+                });
+        });
+
+        checkStatusBtn.addEventListener('click', () => {
+            server1Status.textContent = ' Verificando...';
+            // Verifica a saúde do servidor 1
+            fetch(primaryURL + '/health')
+                .then(response => {
+                    if (response.ok) {
+                        server1Status.textContent = ' ONLINE';
+                    } else {
+                        server1Status.textContent = ' OFFLINE';
+                    }
+                })
+                .catch(error => {
+                    server1Status.textContent = ' OFFLINE';
+                });
+        });
+
+        // Exibe o histórico de mensagens e inicia a conexão
         const history = {{ history|tojson }};
         history.forEach(addMessage);
-
         connectToServer(primaryURL);
     </script>
 </body>
