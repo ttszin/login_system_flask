@@ -1,7 +1,1 @@
-Flask
-Flask-Login
-Flask-SQLAlchemy
-gunicorn
-gevent
-Flask-Sock
-psycopg2-binary # Necessário para o PostgreSQL
+pip freeze > requirements.txt

@@ -30,11 +30,11 @@
 
     <script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
     <script>
-        const primaryURL = "http://127.0.0.1:5000";
-        const backupURL = "http://127.0.0.1:5001";
+        const socket = io();
+        const primaryURL = "http://64.181.188.51:5000";
+        const backupURL = "http://64.181.188.51:5001";
         const statusDiv = document.getElementById('status');
         const messagesDiv = document.getElementById('messages');
-        let socket;
 
         function addMessage(msg) {
             const messageElement = document.createElement('div');
