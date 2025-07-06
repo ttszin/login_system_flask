@@ -1,14 +1,44 @@
-<script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
+<!DOCTYPE html>
+<html lang="pt-br">
+<head>
+    <meta charset="UTF-8">
+    <title>Chat com Failover</title>
+    <style>
+        body { font-family: system-ui, sans-serif; max-width: 800px; margin: auto; padding: 1rem; background-color: #f4f4f9; }
+        h1 { color: #333; }
+        #messages { border: 1px solid #ddd; padding: 1rem; height: 400px; overflow-y: scroll; background-color: white; border-radius: 8px; margin-bottom: 1rem; }
+        #messages div { margin-bottom: 0.5rem; }
+        #messages b { color: #007bff; }
+        #controls { display: flex; gap: 1rem; }
+        #username, #messageInput { border: 1px solid #ccc; padding: 0.75rem; border-radius: 8px; }
+        #username { flex-basis: 25%; }
+        #messageInput { flex-grow: 1; }
+        #sendButton { background-color: #28a745; color: white; border: none; padding: 0.75rem 1.5rem; border-radius: 8px; cursor: pointer; }
+        #sendButton:hover { background-color: #218838; }
+        #status { text-align: center; font-style: italic; color: #666; padding: 0.5rem; }
+    </style>
+</head>
+<body>
+    <h1>Chat Persistente com Failover</h1>
+    <div id="messages"></div>
+    <div id="controls">
+        <input type="text" id="username" placeholder="Seu nome">
+        <input type="text" id="messageInput" placeholder="Digite sua mensagem...">
+        <button id="sendButton">Enviar</button>
+    </div>
+    <div id="status">Conectando...</div>
+
+    <script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
     <script>
-        // URLs dos servidores (com o seu IP público)
         const primaryURL = "http://167.234.230.139:5000";
         const backupURL = "http://167.234.230.139:5001";
         
-        // Elementos da página
         const statusDiv = document.getElementById('status');
         const messagesDiv = document.getElementById('messages');
-
-        // A CORREÇÃO ESTÁ AQUI: Declaramos 'socket' com 'let' para que possa ser reatribuído.
+        const usernameInput = document.getElementById('username');
+        const messageInput = document.getElementById('messageInput');
+        const sendButton = document.getElementById('sendButton');
+        
         let socket;
 
         function addMessage(msg) {
@@ -25,19 +55,17 @@
             newSocket.on('connect_error', () => {
                 newSocket.disconnect();
                 if (serverUrl === primaryURL) {
-                    connectToServer(backupURL); // Tenta o backup
+                    connectToServer(backupURL);
                 } else {
                     statusDiv.innerText = 'Ambos os servidores parecem estar offline.';
                 }
             });
 
             newSocket.on('connect', () => {
-                socket = newSocket; // Agora esta linha funciona sem erros!
+                socket = newSocket;
                 statusDiv.innerText = `Conectado a: ${socket.io.uri}`;
                 socket.on('new_message_broadcast', addMessage);
                 socket.on('disconnect', handleDisconnect);
-                // Habilita o campo de usuário após conectar
-                document.getElementById('username').disabled = false; 
             });
         }
         
@@ -45,13 +73,11 @@
             statusDiv.innerText = 'Conexão perdida! Tentando failover...';
             if (!socket) return;
             const failedUrl = socket.io.uri;
-            const nextUrl = (failedUrl.includes(primaryURL)) ? backupURL : primaryURL;
+            const nextUrl = (failedUrl === primaryURL) ? backupURL : primaryURL;
             setTimeout(() => connectToServer(nextUrl), 3000);
         }
 
-        document.getElementById('sendButton').addEventListener('click', () => {
-            const usernameInput = document.getElementById('username');
-            const messageInput = document.getElementById('messageInput');
+        sendButton.addEventListener('click', () => {
             if (usernameInput.value && messageInput.value && socket && socket.connected) {
                 const message = {
                     username: usernameInput.value,
@@ -61,16 +87,13 @@
                 messageInput.value = '';
                 messageInput.focus();
             } else {
-                alert('Por favor, conecte-se, digite seu nome e uma mensagem.');
+                alert('Por favor, digite seu nome e uma mensagem, e aguarde a conexão.');
             }
         });
         
-        // Exibe o histórico de mensagens
         const history = {{ history|tojson }};
         history.forEach(addMessage);
 
-        // Inicia a conexão
-        document.getElementById('username').disabled = true; // Desabilita o nome de usuário até conectar
         connectToServer(primaryURL);
     </script>
 </body>
